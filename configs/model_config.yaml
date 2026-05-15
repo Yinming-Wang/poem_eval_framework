@@ -1,0 +1,31 @@
+# 模型配置说明：
+# 1. 当前默认使用本地 Hugging Face 模型 Qwen2.5-0.5B-Instruct。
+# 2. 如果只想先跑通流程，可把 model_type 改为 "mock"。
+# 3. Windows 路径建议使用正斜杠，避免反斜杠转义问题。
+
+model:
+  model_name: "Qwen2.5-0.5B-Instruct"
+  model_type: "huggingface"
+  model_path: "./models/Qwen2.5-0.5B-Instruct"
+  tokenizer_path: "./models/Qwen2.5-0.5B-Instruct"
+  device: "cuda"
+
+generation:
+  max_new_tokens: 128
+  temperature: 0.8
+  top_p: 0.95
+  top_k: 50
+  repetition_penalty: 1.1
+  do_sample: true
+
+prompt:
+  template: "请围绕主题“{theme}”创作一首{poem_type}。\n要求：只输出诗词正文，不要标题、解释、赏析、序号或任何说明文字。\n格式要求：五言绝句为四句、每句五个汉字；七言绝句为四句、每句七个汉字。"
+
+# LLM-as-a-Judge 判分模型配置。
+# 这里填写兼容 OpenAI Chat Completions 格式的 API，例如 DeepSeek。
+# evaluation/run_style_eval.py 会默认读取这里的配置；命令行参数可临时覆盖。
+judge:
+  api_url: "https://api.deepseek.com/chat/completions"
+  api_key: "sk-8fbf792f95234e0aa6212748867bdabf"
+  model_name: "deepseek-chat"
+  require_api: true

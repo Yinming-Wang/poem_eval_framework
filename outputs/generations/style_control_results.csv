@@ -1,0 +1,163 @@
+﻿id,task_type,theme,style,poem_type,generation_prompt,generated_poem,format_score,theme_score,fluency_score,style_score,creativity_score,total_score,brief_comment,failure_type,raw_judge_response,error
+S001,style_control,月夜,思乡,五言绝句,"<|im_start|>system
+你是一名擅长中文古典诗词创作的助手。请严格遵循用户给定的主题、风格和诗体要求，只输出诗词正文。<|im_end|>
+<|im_start|>user
+请以“月夜”为主题，按照“思乡”的风格，创作一首【五言绝句】。请直接输出诗词正文，不要解释。<|im_end|>
+<|im_start|>assistant
+","万里边城在，乡心更惹愁。
+月明千里远，独上一厢楼。",100.0,90.0,95.0,90.0,80.0,92.5,严格符合五言绝句格式，主题紧扣月夜思乡，语言流畅古雅，风格纯正，意境稍显常规但完整。,none,"{
+  ""format_score"": 100,
+  ""theme_score"": 90,
+  ""fluency_score"": 95,
+  ""style_score"": 90,
+  ""creativity_score"": 80,
+  ""total_score"": 91,
+  ""brief_comment"": ""严格符合五言绝句格式，主题紧扣月夜思乡，语言流畅古雅，风格纯正，意境稍显常规但完整。"",
+  ""failure_type"": ""none""
+}",
+S002,style_control,江南,婉约,七言绝句,"<|im_start|>system
+你是一名擅长中文古典诗词创作的助手。请严格遵循用户给定的主题、风格和诗体要求，只输出诗词正文。<|im_end|>
+<|im_start|>user
+请以“江南”为主题，按照“婉约”的风格，创作一首【七言绝句】。请直接输出诗词正文，不要解释。<|im_end|>
+<|im_start|>assistant
+","水国渔舟鸣，烟波渺难寻。
+秋风生古岸，斜日映孤岑。
+雁过知音处，花开花落情。
+江南多佳景，一片共君听。",30.0,80.0,70.0,50.0,55.0,57.0,格式严重不符：要求七言绝句，实际为五言八句。主题相关，语言较流畅，但风格偏清冷而非婉约，意境平淡，缺乏新意。,format_error,"{
+  ""format_score"": 30,
+  ""theme_score"": 80,
+  ""fluency_score"": 70,
+  ""style_score"": 50,
+  ""creativity_score"": 55,
+  ""total_score"": 53,
+  ""brief_comment"": ""格式严重不符：要求七言绝句，实际为五言八句。主题相关，语言较流畅，但风格偏清冷而非婉约，意境平淡，缺乏新意。"",
+  ""failure_type"": ""format_error""
+}",
+S003,style_control,边塞,豪迈,七言绝句,"<|im_start|>system
+你是一名擅长中文古典诗词创作的助手。请严格遵循用户给定的主题、风格和诗体要求，只输出诗词正文。<|im_end|>
+<|im_start|>user
+请以“边塞”为主题，按照“豪迈”的风格，创作一首【七言绝句】。请直接输出诗词正文，不要解释。<|im_end|>
+<|im_start|>assistant
+","边水遥连汉苑台，天山飞渡客心哀。
+夕阳无迹随人去，万里风烟尽望开。",100.0,85.0,95.0,70.0,75.0,86.75,格式完全符合七绝，主题紧扣边塞，语言流畅。但风格偏苍凉哀婉，与要求的豪迈有差距，意境较常规，缺乏新意。,none,"{
+  ""format_score"": 100,
+  ""theme_score"": 85,
+  ""fluency_score"": 95,
+  ""style_score"": 70,
+  ""creativity_score"": 75,
+  ""total_score"": 82,
+  ""brief_comment"": ""格式完全符合七绝，主题紧扣边塞，语言流畅。但风格偏苍凉哀婉，与要求的豪迈有差距，意境较常规，缺乏新意。"",
+  ""failure_type"": ""none""
+}",
+S004,style_control,田园,闲适,五言绝句,"<|im_start|>system
+你是一名擅长中文古典诗词创作的助手。请严格遵循用户给定的主题、风格和诗体要求，只输出诗词正文。<|im_end|>
+<|im_start|>user
+请以“田园”为主题，按照“闲适”的风格，创作一首【五言绝句】。请直接输出诗词正文，不要解释。<|im_end|>
+<|im_start|>assistant
+","田园风物好，闲步对清泉。
+野色山间醉，心随雨打弦。",100.0,90.0,95.0,85.0,75.0,91.0,格式完全符合五绝，主题紧扣田园闲适，语言流畅自然，风格较古典，但末句‘雨打弦’意象稍显突兀，创造性一般。,none,"{
+  ""format_score"": 100,
+  ""theme_score"": 90,
+  ""fluency_score"": 95,
+  ""style_score"": 85,
+  ""creativity_score"": 75,
+  ""total_score"": 89,
+  ""brief_comment"": ""格式完全符合五绝，主题紧扣田园闲适，语言流畅自然，风格较古典，但末句‘雨打弦’意象稍显突兀，创造性一般。"",
+  ""failure_type"": ""none""
+}",
+S005,style_control,离别,伤感,七言绝句,"<|im_start|>system
+你是一名擅长中文古典诗词创作的助手。请严格遵循用户给定的主题、风格和诗体要求，只输出诗词正文。<|im_end|>
+<|im_start|>user
+请以“离别”为主题，按照“伤感”的风格，创作一首【七言绝句】。请直接输出诗词正文，不要解释。<|im_end|>
+<|im_start|>assistant
+","月落乌啼霜满天，江枫渔火对愁眠。
+何当共剪西窗烛，却话巴山夜雨时。",100.0,40.0,100.0,100.0,20.0,77.0,格式完美，语言流畅，风格古典，但完全抄袭张继《枫桥夜泊》前两句和李商隐《夜雨寄北》后两句，主题偏离'离别'，缺乏原创性。,topic_drift,"{
+  ""format_score"": 100,
+  ""theme_score"": 40,
+  ""fluency_score"": 100,
+  ""style_score"": 100,
+  ""creativity_score"": 20,
+  ""total_score"": 60,
+  ""brief_comment"": ""格式完美，语言流畅，风格古典，但完全抄袭张继《枫桥夜泊》前两句和李商隐《夜雨寄北》后两句，主题偏离'离别'，缺乏原创性。"",
+  ""failure_type"": ""topic_drift""
+}",
+S006,style_control,春雨,清新,五言绝句,"<|im_start|>system
+你是一名擅长中文古典诗词创作的助手。请严格遵循用户给定的主题、风格和诗体要求，只输出诗词正文。<|im_end|>
+<|im_start|>user
+请以“春雨”为主题，按照“清新”的风格，创作一首【五言绝句】。请直接输出诗词正文，不要解释。<|im_end|>
+<|im_start|>assistant
+","春雨洗铅华，润物湿新芽。
+天晴溪水过，花开满园香。",100.0,90.0,95.0,85.0,75.0,91.0,格式完全符合五言绝句，主题紧扣春雨，语言流畅自然，风格清新但稍显平实，意境有一定画面感但创新不足。,none,"{
+  ""format_score"": 100,
+  ""theme_score"": 90,
+  ""fluency_score"": 95,
+  ""style_score"": 85,
+  ""creativity_score"": 75,
+  ""total_score"": 89,
+  ""brief_comment"": ""格式完全符合五言绝句，主题紧扣春雨，语言流畅自然，风格清新但稍显平实，意境有一定画面感但创新不足。"",
+  ""failure_type"": ""none""
+}",
+S007,style_control,秋风,萧瑟,七言绝句,"<|im_start|>system
+你是一名擅长中文古典诗词创作的助手。请严格遵循用户给定的主题、风格和诗体要求，只输出诗词正文。<|im_end|>
+<|im_start|>user
+请以“秋风”为主题，按照“萧瑟”的风格，创作一首【七言绝句】。请直接输出诗词正文，不要解释。<|im_end|>
+<|im_start|>assistant
+","秋风吹叶满园香，雁字南飞一见伤。
+独倚危楼徒自笑，人间万事已成霜。",100.0,95.0,100.0,90.0,85.0,95.25,严格符合七绝格式，紧扣秋风萧瑟主题，语言流畅，意象典型，风格鲜明，意境略有新意但稍显常规。,none,"{
+  ""format_score"": 100,
+  ""theme_score"": 95,
+  ""fluency_score"": 100,
+  ""style_score"": 90,
+  ""creativity_score"": 85,
+  ""total_score"": 93,
+  ""brief_comment"": ""严格符合七绝格式，紧扣秋风萧瑟主题，语言流畅，意象典型，风格鲜明，意境略有新意但稍显常规。"",
+  ""failure_type"": ""none""
+}",
+S008,style_control,冬雪,孤寂,五言绝句,"<|im_start|>system
+你是一名擅长中文古典诗词创作的助手。请严格遵循用户给定的主题、风格和诗体要求，只输出诗词正文。<|im_end|>
+<|im_start|>user
+请以“冬雪”为主题，按照“孤寂”的风格，创作一首【五言绝句】。请直接输出诗词正文，不要解释。<|im_end|>
+<|im_start|>assistant
+","独有寒花苦，非同秋叶黄。
+清辉满庭树，凝结雪中霜。",100.0,85.0,90.0,80.0,75.0,87.75,格式完全符合五言绝句，主题围绕冬雪，语言流畅，有孤寂感，但意境稍显常规，创造性一般。,none,"{
+  ""format_score"": 100,
+  ""theme_score"": 85,
+  ""fluency_score"": 90,
+  ""style_score"": 80,
+  ""creativity_score"": 75,
+  ""total_score"": 86,
+  ""brief_comment"": ""格式完全符合五言绝句，主题围绕冬雪，语言流畅，有孤寂感，但意境稍显常规，创造性一般。"",
+  ""failure_type"": ""none""
+}",
+S009,style_control,中秋,团圆,七言绝句,"<|im_start|>system
+你是一名擅长中文古典诗词创作的助手。请严格遵循用户给定的主题、风格和诗体要求，只输出诗词正文。<|im_end|>
+<|im_start|>user
+请以“中秋”为主题，按照“团圆”的风格，创作一首【七言绝句】。请直接输出诗词正文，不要解释。<|im_end|>
+<|im_start|>assistant
+","独步蟾宫月正圆，人情共醉一尊温。
+几回重九同登高，玉露金风送岁年。",100.0,70.0,85.0,80.0,65.0,82.0,格式完全符合七绝，主题围绕中秋团圆，但“重九登高”与中秋时令冲突，意境稍显混杂，缺乏新意。,topic_drift,"{
+  ""format_score"": 100,
+  ""theme_score"": 70,
+  ""fluency_score"": 85,
+  ""style_score"": 80,
+  ""creativity_score"": 65,
+  ""total_score"": 78,
+  ""brief_comment"": ""格式完全符合七绝，主题围绕中秋团圆，但“重九登高”与中秋时令冲突，意境稍显混杂，缺乏新意。"",
+  ""failure_type"": ""topic_drift""
+}",
+S010,style_control,登高,壮阔,七言绝句,"<|im_start|>system
+你是一名擅长中文古典诗词创作的助手。请严格遵循用户给定的主题、风格和诗体要求，只输出诗词正文。<|im_end|>
+<|im_start|>user
+请以“登高”为主题，按照“壮阔”的风格，创作一首【七言绝句】。请直接输出诗词正文，不要解释。<|im_end|>
+<|im_start|>assistant
+","高树连冈雪满天，孤舟欲渡水东边。
+登临万壑无双路，直取峰头看碧烟。",100.0,90.0,95.0,90.0,85.0,93.0,严格符合七绝格式，主题紧扣登高，语言流畅，风格壮阔，意境有画面感，但末句稍显平淡，略有套话痕迹。,none,"{
+  ""format_score"": 100,
+  ""theme_score"": 90,
+  ""fluency_score"": 95,
+  ""style_score"": 90,
+  ""creativity_score"": 85,
+  ""total_score"": 92,
+  ""brief_comment"": ""严格符合七绝格式，主题紧扣登高，语言流畅，风格壮阔，意境有画面感，但末句稍显平淡，略有套话痕迹。"",
+  ""failure_type"": ""none""
+}",

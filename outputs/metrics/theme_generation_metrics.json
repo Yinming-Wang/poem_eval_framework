@@ -1,0 +1,18 @@
+{
+  "task_type": "theme_generation",
+  "total_samples": 10,
+  "format_correct_samples": 0,
+  "format_accuracy": 0.0,
+  "poem_type_breakdown": {
+    "五言绝句": {
+      "total": 5,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "七言绝句": {
+      "total": 5,
+      "correct": 0,
+      "accuracy": 0.0
+    }
+  }
+}

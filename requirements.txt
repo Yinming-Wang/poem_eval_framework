@@ -1,0 +1,10 @@
+pyyaml
+pandas
+tqdm
+regex
+nltk
+requests
+datasets
+transformers
+torch
+gradio

@@ -1,0 +1,8 @@
+{
+  "task_type": "keyword_generation",
+  "total_samples": 100,
+  "all_keywords_hit_samples": 43,
+  "all_keywords_hit_accuracy": 0.43,
+  "average_hit_rate": 0.7133,
+  "average_repetition_rate": 0.0038
+}

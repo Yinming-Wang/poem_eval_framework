@@ -1,0 +1,8 @@
+{
+  "task_type": "prefix_continuation",
+  "total_samples": 106,
+  "average_BLEU-4": 0.0135,
+  "average_ROUGE-L": 0.0537,
+  "average_BLEU-4-%": 1.35,
+  "average_ROUGE-L-%": 5.37
+}
