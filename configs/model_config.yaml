@@ -3,12 +3,25 @@
 # 2. 如果只想先跑通流程，可把 model_type 改为 "mock"。
 # 3. Windows 路径建议使用正斜杠，避免反斜杠转义问题。
 
+# WebUI 多模型评测：以下列表填写 models/ 下的子目录名（与扫描到的目录一致）。
+# 非空则 WebUI 进入多模型模式，可勾选同时进行单条评测与批量评测；列表有几项就代表最多可同时测几个（也可少选）。
+# 留空或整段删掉则仍为单模型模式：仍用下拉框从 models/ 中任选一个目录。
+eval_models:
+  - "LSTM"
+  - "GPT2-full-finetune"
+  - "Qwen3-0.6-full-finetune"
+  - "GLM-9B-lora-finetune"
+  - "Qwen2.5-0.5B-Instruct"
+
+# 可选：限制 WebUI 勾选数量上限（不填则至多可选 eval_models 中全部项）。
+# webui_max_parallel_models: 2
+
 model:
-  model_name: "Qwen2.5-0.5B-Instruct"
+  model_name: "LSTM"
   model_type: "huggingface"
-  model_path: "./models/Qwen2.5-0.5B-Instruct"
-  tokenizer_path: "./models/Qwen2.5-0.5B-Instruct"
-  device: "cuda"
+  model_path: "MODEL_PATH"
+  tokenizer_path: "TOKENIZER_PATH"
+  device: "cuda:0"
 
 generation:
   max_new_tokens: 128
@@ -26,6 +39,6 @@ prompt:
 # evaluation/run_style_eval.py 会默认读取这里的配置；命令行参数可临时覆盖。
 judge:
   api_url: "https://api.deepseek.com/chat/completions"
-  api_key: "sk-8fbf792f95234e0aa6212748867bdabf"
+  api_key: "API_KEY"
   model_name: "deepseek-chat"
   require_api: true

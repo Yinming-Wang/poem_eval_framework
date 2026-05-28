@@ -5,8 +5,9 @@
 
 说明：
     1. WebUI 会扫描 models/ 文件夹中的子目录，并在界面中提供本地模型选择。
-    2. 选择模型会覆盖 configs/model_config.yaml 中的 model_path/tokenizer_path/model_name。
-    3. 为控制 API 成本，裁判大模型默认仅在“风格控制”任务中调用；其它任务只展示规则指标。
+    2. 若 configs/model_config.yaml 中的 eval_models 非空，将进入多模型模式（勾选并行评测所列模型）。
+    3. eval_models 留空时为单模型模式：选择单个目录会覆盖同文件 model 块的 model_path/tokenizer_path/model_name。
+    4. 为控制 API 成本，裁判大模型默认仅在“风格控制”任务中调用；其它任务只展示规则指标。
 """
 
 from __future__ import annotations
@@ -31,9 +32,16 @@ from evaluation.format_check import check_format
 from evaluation.keyword_coverage import evaluate_keyword_coverage
 from evaluation.llm_judge import call_judge_api, parse_judge_result
 from inference.continuation_prompt import build_continuation_prompt
-from inference.generate import clean_continuation_text, clean_generated_text, generate_poem
+from inference.generate import (
+    clean_continuation_text,
+    clean_generated_text,
+    generate_from_chat_messages,
+    generate_huggingface_text,
+    generate_poem,
+)
 from inference.keyword_prompt import build_keyword_prompt
 from inference.model_loader import load_model_and_tokenizer
+from inference.lstm_backend import is_lstm_vocab_file, pick_lstm_checkpoint
 from inference.style_prompt import build_judge_prompt, build_style_prompt
 from evaluation.run_theme_eval import evaluate_theme_generation
 from evaluation.run_keyword_eval import evaluate_keyword_generation
@@ -75,6 +83,80 @@ def list_available_models() -> List[str]:
     return sorted(model_names)
 
 
+def _normalized_eval_models_raw(config: Dict[str, Any]) -> List[str]:
+    """从配置中读出 eval_models 原始列表。"""
+    raw = config.get("eval_models")
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        raw_list = [raw]
+    elif isinstance(raw, list):
+        raw_list = raw
+    else:
+        raise ValueError("configs/model_config.yaml 中的 eval_models 必须是字符串列表或单个字符串。")
+    return [str(item).strip() for item in raw_list if str(item).strip()]
+
+
+def get_eval_models_from_config() -> List[str]:
+    """WebUI 多模型评测：按 YAML eval_models 顺序，仅保留 models/ 下存在的目录。"""
+    config = load_config()
+    raw_list = _normalized_eval_models_raw(config)
+    if not raw_list:
+        return []
+
+    allowed = set(list_available_models())
+    resolved = [name for name in raw_list if name in allowed]
+    missing = sorted(set(raw_list) - set(resolved))
+    if missing:
+        print("[webui] 警告：eval_models 中以下目录不在 models/ 下，已忽略：", ", ".join(missing))
+
+    if raw_list and not resolved:
+        raise ValueError(
+            "configs/model_config.yaml 中 eval_models 已填写，但在 models/ 下未匹配到任一有效目录，"
+            "请检查名称是否与 models/<目录名>/ 完全一致。"
+        )
+    return resolved
+
+
+def get_webui_max_parallel_models_cap() -> Optional[int]:
+    """可选上限：勾选的同时评测模型数不能超过该值；未配置则不限制。"""
+    config = load_config()
+    raw = config.get("webui_max_parallel_models")
+    if raw is None or raw == "":
+        return None
+    try:
+        cap = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if cap < 1:
+        return None
+    return cap
+
+
+def resolve_model_selection(multi_selected: List[str], single_selected: str) -> List[str]:
+    """合并多模型勾选与单选下拉：由 eval_models 是否非空决定模式。"""
+    pool = get_eval_models_from_config()
+    if pool:
+        selected = [str(item).strip() for item in (multi_selected or []) if str(item).strip() in pool]
+        if not selected:
+            raise ValueError("请在「待测模型（多选）」中至少勾选一项。")
+        rank = {name: idx for idx, name in enumerate(pool)}
+        selected = sorted(selected, key=lambda item: rank.get(item, 10**9))
+
+        cap = get_webui_max_parallel_models_cap()
+        if cap is not None and len(selected) > cap:
+            raise ValueError(
+                "同时评测模型数不能超过 {cap}（由 configs/model_config.yaml 中的 webui_max_parallel_models 设置）。"
+                .format(cap=cap)
+            )
+        return selected
+
+    one = str(single_selected or "").strip()
+    if not one:
+        raise ValueError("请选择模型。")
+    return [one]
+
+
 def get_default_model_selection() -> str:
     """根据配置文件和 models/ 目录推断默认选中的模型。"""
     model_names = list_available_models()
@@ -86,11 +168,23 @@ def get_default_model_selection() -> str:
     return model_names[0] if model_names else ""
 
 
-def refresh_model_choices() -> Any:
-    """刷新模型下拉框选项。"""
-    model_names = list_available_models()
-    selected_model = get_default_model_selection()
-    return gr.update(choices=model_names, value=selected_model)
+def refresh_model_choice_widgets() -> Tuple[Any, Any]:
+    """刷新单选下拉框与多选列表；读取最新 eval_models 配置。"""
+    pool = get_eval_models_from_config()
+    dropdown_names = list_available_models()
+    default_single = get_default_model_selection()
+
+    if pool:
+        default_multi = pool[:]
+        return (
+            gr.update(choices=dropdown_names, value=default_single, visible=False),
+            gr.update(choices=pool, value=default_multi, visible=True),
+        )
+
+    return (
+        gr.update(choices=dropdown_names, value=default_single, visible=True),
+        gr.update(choices=[], value=[], visible=False),
+    )
 
 
 def build_config_for_selected_model(selected_model: str) -> Dict[str, Any]:
@@ -103,14 +197,27 @@ def build_config_for_selected_model(selected_model: str) -> Dict[str, Any]:
         model_path = MODELS_DIR / selected_model
         if not model_path.exists():
             raise FileNotFoundError("选择的模型目录不存在：{0}".format(model_path))
-        model_config.update(
-            {
-                "model_name": selected_model,
-                "model_type": "huggingface",
-                "model_path": str(model_path),
-                "tokenizer_path": str(model_path),
-            }
-        )
+        is_lstm_dir = is_lstm_vocab_file(model_path / "vocab.json") and not (
+            model_path / "adapter_config.json"
+        ).is_file()
+        if is_lstm_dir:
+            model_config.update(
+                {
+                    "model_name": selected_model,
+                    "model_type": "lstm",
+                    "model_path": str(model_path),
+                    "tokenizer_path": str(model_path),
+                }
+            )
+        else:
+            model_config.update(
+                {
+                    "model_name": selected_model,
+                    "model_type": "huggingface",
+                    "model_path": str(model_path),
+                    "tokenizer_path": str(model_path),
+                }
+            )
 
     config["model"] = model_config
     return config
@@ -121,10 +228,13 @@ def get_local_model(selected_model: str) -> Tuple[Any, Any, Dict[str, Any]]:
     config_mtime = CONFIG_PATH.stat().st_mtime
     config = build_config_for_selected_model(selected_model)
     model_config = config.get("model", {})
-    cache_key = "{0}|{1}|{2}".format(
+    ckpt = pick_lstm_checkpoint(Path(str(model_config.get("model_path", "") or "")))
+    ckpt_mtime = str(ckpt.stat().st_mtime) if ckpt is not None and ckpt.is_file() else ""
+    cache_key = "{0}|{1}|{2}|{3}".format(
         model_config.get("model_name", ""),
         model_config.get("model_path", ""),
         config_mtime,
+        ckpt_mtime,
     )
 
     if cache_key not in _LOCAL_MODEL_CACHE:
@@ -167,42 +277,6 @@ def messages_to_prompt(tokenizer: Any, messages: List[Dict[str, str]]) -> str:
     parts = ["{0}: {1}".format(item.get("role", "user"), item.get("content", "")) for item in messages]
     parts.append("assistant:")
     return "\n".join(parts)
-
-
-def generate_huggingface_text(model: Any, tokenizer: Any, prompt: str, config: Dict[str, Any]) -> str:
-    """调用本地 Hugging Face 模型生成文本，只解码新增 token。"""
-    if tokenizer is None:
-        raise ValueError("Hugging Face 生成需要 tokenizer。")
-
-    import torch
-
-    generation_config = config.get("generation", {})
-    device = getattr(model, "eval_device", None)
-    if device is None:
-        device = next(model.parameters()).device
-
-    inputs = tokenizer(prompt, return_tensors="pt")
-    inputs = {key: value.to(device) for key, value in inputs.items()}
-    input_length = inputs["input_ids"].shape[-1]
-
-    pad_token_id = tokenizer.eos_token_id
-    if pad_token_id is None and tokenizer.pad_token_id is not None:
-        pad_token_id = tokenizer.pad_token_id
-
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=generation_config.get("max_new_tokens", 128),
-            temperature=generation_config.get("temperature", 0.8),
-            top_p=generation_config.get("top_p", 0.95),
-            top_k=generation_config.get("top_k", 50),
-            repetition_penalty=generation_config.get("repetition_penalty", 1.1),
-            do_sample=generation_config.get("do_sample", True),
-            pad_token_id=pad_token_id,
-        )
-
-    generated_ids = outputs[0][input_length:]
-    return clean_generated_text(tokenizer.decode(generated_ids, skip_special_tokens=True))
 
 
 def call_openai_compatible_chat(
@@ -260,13 +334,28 @@ def generate_with_test_model(
         raise ValueError("不支持的任务类型：{0}".format(task_type))
 
     model, tokenizer, config = get_local_model(selected_model)
+
+    if getattr(model, "model_type", None) == "lstm":
+        prefix_for = str(sample.get("prefix", "") or "") if task_type == "prefix_continuation" else ""
+        return generate_from_chat_messages(
+            model,
+            tokenizer,
+            messages,
+            config,
+            poem_type=str(sample.get("poem_type") or ""),
+            continuation_prefix=prefix_for,
+        )
+
     prompt = messages_to_prompt(tokenizer, messages)
     if hasattr(model, "generate_poem") and task_type != "prefix_continuation":
-        return clean_generated_text(model.generate_poem(sample.get("theme", ""), sample.get("poem_type", "")))
+        return clean_generated_text(
+            model.generate_poem(sample.get("theme", ""), sample.get("poem_type", "")),
+            poem_type=str(sample.get("poem_type") or ""),
+        )
     generated_text = generate_huggingface_text(model, tokenizer, prompt, config)
     if task_type == "prefix_continuation":
         return clean_continuation_text(generated_text, prefix=sample.get("prefix", ""))
-    return generated_text
+    return clean_generated_text(generated_text, poem_type=str(sample.get("poem_type") or ""))
 
 
 def resolve_judge_config(judge_url: str, judge_api_key: str) -> Dict[str, str]:
@@ -469,9 +558,36 @@ def format_metrics_markdown(
     return "\n".join(lines)
 
 
+def evaluate_one_model_with_sample(
+    task_type: str,
+    sample: Dict[str, Any],
+    selected_model: str,
+    judge_url: str,
+    judge_api_key: str,
+    reference_override: str,
+) -> Tuple[str, str, str]:
+    """对单条样本、单个待测模型：生成 + 规则指标 + 按需裁判打分。"""
+    generated_poem = generate_with_test_model(task_type, sample, selected_model)
+    reference_line = reference_override.strip() if reference_override else ""
+    if not reference_line and task_type == "prefix_continuation":
+        references = sample.get("references") or []
+        reference_line = references[0] if references else ""
+
+    rule_metrics = build_rule_metrics(task_type, sample, generated_poem, reference=reference_line)
+    judge_scores, brief_comment = evaluate_with_judge_if_needed(
+        sample=sample,
+        generated_poem=generated_poem,
+        judge_url=judge_url,
+        judge_api_key=judge_api_key,
+    )
+
+    metrics_markdown = format_metrics_markdown(task_type, rule_metrics, judge_scores)
+    return generated_poem, metrics_markdown, brief_comment
+
+
 def real_evaluate_pipeline(
     task_type: str,
-    selected_model: str,
+    selected_models: List[str],
     judge_url: str,
     judge_api_key: str,
     theme: str = "",
@@ -481,7 +597,7 @@ def real_evaluate_pipeline(
     style: str = "",
     poem_type: str = "五言绝句",
 ) -> Tuple[str, str, str]:
-    """真实评测流程：调用待测模型、规则评价，并按需调用裁判模型。"""
+    """真实评测流程：对给定样本依次调用所列待测模型。"""
     keyword_list = split_keywords(keywords)
     sample = {
         "id": "WEB001",
@@ -493,18 +609,40 @@ def real_evaluate_pipeline(
         "poem_type": poem_type,
         "references": [reference.strip()] if reference.strip() else [],
     }
+    reference_override = reference
 
-    generated_poem = generate_with_test_model(task_type, sample, selected_model)
-    rule_metrics = build_rule_metrics(task_type, sample, generated_poem, reference=reference)
-    judge_scores, brief_comment = evaluate_with_judge_if_needed(
-        sample=sample,
-        generated_poem=generated_poem,
-        judge_url=judge_url,
-        judge_api_key=judge_api_key,
+    if len(selected_models) == 1:
+        return evaluate_one_model_with_sample(
+            task_type=task_type,
+            sample=sample,
+            selected_model=selected_models[0],
+            judge_url=judge_url,
+            judge_api_key=judge_api_key,
+            reference_override=reference_override,
+        )
+
+    poems: List[str] = []
+    metrics_parts: List[str] = []
+    comments: List[str] = []
+
+    for model_dir_name in selected_models:
+        poem, metrics_markdown, brief_comment = evaluate_one_model_with_sample(
+            task_type=task_type,
+            sample=sample,
+            selected_model=model_dir_name,
+            judge_url=judge_url,
+            judge_api_key=judge_api_key,
+            reference_override=reference_override,
+        )
+        poems.append("### `{0}`\n\n{1}".format(model_dir_name, poem.strip() or "(空生成)"))
+        metrics_parts.append("### `{0}`\n\n{1}".format(model_dir_name, metrics_markdown))
+        comments.append("**{0}**：{1}".format(model_dir_name, brief_comment))
+
+    return (
+        "\n\n---\n\n".join(poems),
+        "\n\n---\n\n".join(metrics_parts),
+        "\n\n".join(comments),
     )
-
-    metrics_markdown = format_metrics_markdown(task_type, rule_metrics, judge_scores)
-    return generated_poem, metrics_markdown, brief_comment
 
 
 def format_batch_metrics(task_name: str, results_path: Path, metrics_path: Path, metrics: Dict[str, Any]) -> str:
@@ -531,65 +669,88 @@ def format_batch_metrics(task_name: str, results_path: Path, metrics_path: Path,
     return "\n".join(lines)
 
 
-def run_batch_eval(task_type: str, selected_model: str, max_samples: int) -> str:
-    """从 WebUI 直接调用 evaluation/run_*_eval.py 对应的本地批量评测函数。"""
-    config = build_config_for_selected_model(selected_model)
+def run_batch_eval(task_type: str, selected_models: List[str], max_samples: int) -> str:
+    """从 WebUI 直接调用 evaluation/run_*_eval.py；可对多个模型依次批量评测。"""
     output_dir = "outputs"
     max_samples = int(max_samples or 0)
 
-    if task_type == "theme_generation":
-        results_path, metrics_path, metrics = evaluate_theme_generation(
-            config=config,
-            output_dir=output_dir,
-            max_samples=max_samples,
+    section_blocks: List[str] = []
+    prefix_batch_seed = random.randint(1, 999999)
+
+    for idx, model_name in enumerate(selected_models):
+        config = build_config_for_selected_model(model_name)
+
+        if task_type == "theme_generation":
+            results_path, metrics_path, metrics = evaluate_theme_generation(
+                config=config,
+                output_dir=output_dir,
+                max_samples=max_samples,
+            )
+            block = format_batch_metrics("主题词生成", results_path, metrics_path, metrics)
+
+        elif task_type == "keyword_generation":
+            results_path, metrics_path, metrics = evaluate_keyword_generation(
+                config=config,
+                output_dir=output_dir,
+                max_samples=max_samples,
+            )
+            block = format_batch_metrics("关键词约束", results_path, metrics_path, metrics)
+
+        elif task_type == "prefix_continuation":
+            results_path, metrics_path, metrics = evaluate_prefix_continuation(
+                config=config,
+                output_dir=output_dir,
+                max_samples=max_samples,
+                samples_file="",
+                sample_source="builtin",
+                hf_dataset="MatrixStudio/ChinesePoetry",
+                hf_split="train",
+                hf_scan_limit=0,
+                shuffle=True,
+                seed=prefix_batch_seed,
+            )
+            block = format_batch_metrics("上句续写", results_path, metrics_path, metrics)
+
+        elif task_type == "style_control":
+            args = SimpleNamespace(judge_url="", judge_key="", judge_model="", require_judge_api=False)
+            judge_config = resolve_style_judge_config(config, args)
+            validate_judge_config(judge_config)
+            results_path, metrics_path, metrics = evaluate_style_control(
+                config=config,
+                output_dir=output_dir,
+                max_samples=max_samples,
+                judge_url=judge_config["api_url"],
+                judge_key=judge_config["api_key"],
+                judge_model=judge_config["model_name"],
+                require_judge_api=judge_config["require_api"],
+            )
+            block = format_batch_metrics("风格控制", results_path, metrics_path, metrics)
+
+        else:
+            raise ValueError("不支持的批量评测任务：{0}".format(task_type))
+
+        section_blocks.append(
+            "## 模型：`{model}`（{ordinal}/{total}）\n\n{body}".format(
+                model=model_name,
+                ordinal=idx + 1,
+                total=len(selected_models),
+                body=block,
+            )
         )
-        return format_batch_metrics("主题词生成", results_path, metrics_path, metrics)
 
-    if task_type == "keyword_generation":
-        results_path, metrics_path, metrics = evaluate_keyword_generation(
-            config=config,
-            output_dir=output_dir,
-            max_samples=max_samples,
-        )
-        return format_batch_metrics("关键词约束", results_path, metrics_path, metrics)
-
-    if task_type == "prefix_continuation":
-        results_path, metrics_path, metrics = evaluate_prefix_continuation(
-            config=config,
-            output_dir=output_dir,
-            max_samples=max_samples,
-            samples_file="",
-            sample_source="builtin",
-            hf_dataset="MatrixStudio/ChinesePoetry",
-            hf_split="train",
-            hf_scan_limit=0,
-            shuffle=True,
-            seed=random.randint(1, 999999),
-        )
-        return format_batch_metrics("上句续写", results_path, metrics_path, metrics)
-
-    if task_type == "style_control":
-        args = SimpleNamespace(judge_url="", judge_key="", judge_model="", require_judge_api=False)
-        judge_config = resolve_style_judge_config(config, args)
-        validate_judge_config(judge_config)
-        results_path, metrics_path, metrics = evaluate_style_control(
-            config=config,
-            output_dir=output_dir,
-            max_samples=max_samples,
-            judge_url=judge_config["api_url"],
-            judge_key=judge_config["api_key"],
-            judge_model=judge_config["model_name"],
-            require_judge_api=judge_config["require_api"],
-        )
-        return format_batch_metrics("风格控制", results_path, metrics_path, metrics)
-
-    raise ValueError("不支持的批量评测任务：{0}".format(task_type))
+    return "\n\n---\n\n".join(section_blocks)
 
 
-def safe_run_batch(task_type: str, selected_model: str, max_samples: int) -> str:
+def safe_run_batch(
+    task_type: str,
+    multi_selected: List[str],
+    single_selected: str,
+    max_samples: int,
+) -> str:
     """包装批量评测，避免异常直接打断前端。"""
     try:
-        return run_batch_eval(task_type, selected_model, max_samples)
+        models = resolve_model_selection(multi_selected, single_selected)
+        return run_batch_eval(task_type, models, max_samples)
     except Exception as exc:
         return "### 批量评测失败\n\n{0}".format(exc)
 
@@ -614,16 +775,18 @@ def reset_button() -> Any:
 
 
 def run_theme_task(
-    selected_model: str,
+    multi_selected: List[str],
+    single_selected: str,
     judge_url: str,
     judge_api_key: str,
     theme: str,
     poem_type: str,
 ) -> Tuple[str, str, str]:
     """主题词生成任务入口。"""
+    models = resolve_model_selection(multi_selected, single_selected)
     return real_evaluate_pipeline(
         task_type="theme_generation",
-        selected_model=selected_model,
+        selected_models=models,
         judge_url=judge_url,
         judge_api_key=judge_api_key,
         theme=theme,
@@ -632,16 +795,18 @@ def run_theme_task(
 
 
 def run_keyword_task(
-    selected_model: str,
+    multi_selected: List[str],
+    single_selected: str,
     judge_url: str,
     judge_api_key: str,
     keywords: str,
     poem_type: str,
 ) -> Tuple[str, str, str]:
     """关键词约束生成任务入口。"""
+    models = resolve_model_selection(multi_selected, single_selected)
     return real_evaluate_pipeline(
         task_type="keyword_generation",
-        selected_model=selected_model,
+        selected_models=models,
         judge_url=judge_url,
         judge_api_key=judge_api_key,
         keywords=keywords,
@@ -650,16 +815,18 @@ def run_keyword_task(
 
 
 def run_prefix_task(
-    selected_model: str,
+    multi_selected: List[str],
+    single_selected: str,
     judge_url: str,
     judge_api_key: str,
 ) -> Tuple[str, str, str]:
-    """上句续写任务入口：从内置样本池随机抽取上句和参考答案。"""
+    """上句续写任务入口：从内置样本池随机抽取一条，多模型共用同一样本以利于对比。"""
+    models = resolve_model_selection(multi_selected, single_selected)
     sample = random.choice(build_prefix_continuation_samples())
     selected_reference = sample.get("references", [""])[0]
     return real_evaluate_pipeline(
         task_type="prefix_continuation",
-        selected_model=selected_model,
+        selected_models=models,
         judge_url=judge_url,
         judge_api_key=judge_api_key,
         prefix=sample["prefix"],
@@ -669,7 +836,8 @@ def run_prefix_task(
 
 
 def run_style_task(
-    selected_model: str,
+    multi_selected: List[str],
+    single_selected: str,
     judge_url: str,
     judge_api_key: str,
     theme: str,
@@ -677,9 +845,10 @@ def run_style_task(
     poem_type: str,
 ) -> Tuple[str, str, str]:
     """风格控制任务入口。"""
+    models = resolve_model_selection(multi_selected, single_selected)
     return real_evaluate_pipeline(
         task_type="style_control",
-        selected_model=selected_model,
+        selected_models=models,
         judge_url=judge_url,
         judge_api_key=judge_api_key,
         theme=theme,
@@ -700,6 +869,9 @@ def bind_task_button(button: gr.Button, task_fn: Any, inputs: List[Any], outputs
 
 def build_demo() -> gr.Blocks:
     """构建 Gradio Blocks 应用。"""
+    pool = get_eval_models_from_config()
+    multi_mode = bool(pool)
+
     css = """
     .app-title { text-align: center; margin-bottom: 0.5rem; }
     .app-subtitle { text-align: center; color: #666; margin-top: -0.5rem; margin-bottom: 1rem; }
@@ -714,23 +886,40 @@ def build_demo() -> gr.Blocks:
         )
 
         with gr.Accordion("模型选择", open=True):
-            gr.Markdown("从 `models/` 文件夹中选择本地待测模型。新模型放入 `models/模型目录名/` 后，点击刷新即可出现在下拉框中。")
+            gr.Markdown(
+                "从 `models/` 中选择本地待测模型。若 **configs/model_config.yaml** 中的 `eval_models` 非空，"
+                "将按该列表出现多选框，可同时评测勾选的多个模型；留空 `eval_models` 时仍为单模型下拉框。"
+                "新模型目录放入 `models/模型目录名/` 后点击「刷新」。"
+            )
             with gr.Row():
+                model_checkbox = gr.CheckboxGroup(
+                    choices=pool,
+                    value=pool[:],
+                    label="待测模型（多选，来自 eval_models）",
+                    visible=multi_mode,
+                    interactive=True,
+                )
                 model_selector = gr.Dropdown(
                     label="待测模型",
                     choices=list_available_models(),
                     value=get_default_model_selection(),
                     interactive=True,
+                    visible=not multi_mode,
                 )
                 refresh_model_button = gr.Button("刷新模型列表")
                 judge_url = gr.Textbox(label="裁判模型 URL", value="https://api.deepseek.com/chat/completions")
                 judge_api_key = gr.Textbox(label="裁判模型 API Key", type="password", placeholder="风格控制任务使用")
-            refresh_model_button.click(fn=refresh_model_choices, inputs=None, outputs=model_selector)
+            refresh_model_button.click(
+                fn=refresh_model_choice_widgets,
+                inputs=None,
+                outputs=[model_selector, model_checkbox],
+            )
 
         with gr.Accordion("批量本地评测", open=False):
             gr.Markdown(
                 "这里直接调用本地 `evaluation/run_theme_eval.py`、`run_keyword_eval.py`、"
                 "`run_prefix_eval.py`、`run_style_eval.py` 对应的评测函数，输出仍保存到 `outputs/`。"
+                "多模型模式下会按顺序依次完成各模型的批量评测。"
             )
             with gr.Row():
                 batch_max_samples = gr.Number(label="批量样本数", value=10, precision=0)
@@ -741,26 +930,26 @@ def build_demo() -> gr.Blocks:
             batch_output = gr.Markdown(label="批量评测摘要")
 
             batch_theme_button.click(
-                fn=lambda selected_model, max_samples: safe_run_batch("theme_generation", selected_model, max_samples),
-                inputs=[model_selector, batch_max_samples],
+                fn=lambda multi, single, max_samples: safe_run_batch("theme_generation", multi, single, max_samples),
+                inputs=[model_checkbox, model_selector, batch_max_samples],
                 outputs=batch_output,
                 show_progress="full",
             )
             batch_keyword_button.click(
-                fn=lambda selected_model, max_samples: safe_run_batch("keyword_generation", selected_model, max_samples),
-                inputs=[model_selector, batch_max_samples],
+                fn=lambda multi, single, max_samples: safe_run_batch("keyword_generation", multi, single, max_samples),
+                inputs=[model_checkbox, model_selector, batch_max_samples],
                 outputs=batch_output,
                 show_progress="full",
             )
             batch_prefix_button.click(
-                fn=lambda selected_model, max_samples: safe_run_batch("prefix_continuation", selected_model, max_samples),
-                inputs=[model_selector, batch_max_samples],
+                fn=lambda multi, single, max_samples: safe_run_batch("prefix_continuation", multi, single, max_samples),
+                inputs=[model_checkbox, model_selector, batch_max_samples],
                 outputs=batch_output,
                 show_progress="full",
             )
             batch_style_button.click(
-                fn=lambda selected_model, max_samples: safe_run_batch("style_control", selected_model, max_samples),
-                inputs=[model_selector, batch_max_samples],
+                fn=lambda multi, single, max_samples: safe_run_batch("style_control", multi, single, max_samples),
+                inputs=[model_checkbox, model_selector, batch_max_samples],
                 outputs=batch_output,
                 show_progress="full",
             )
@@ -773,14 +962,14 @@ def build_demo() -> gr.Blocks:
                         theme_poem_type = gr.Dropdown(label="诗体", choices=POEM_TYPES, value="五言绝句")
                         theme_button = gr.Button("🚀 开始测试", variant="primary")
                     with gr.Column(scale=2):
-                        theme_poem_output = gr.Textbox(label="待测模型生成结果", lines=4)
+                        theme_poem_output = gr.Textbox(label="待测模型生成结果", lines=10)
                         theme_metrics_output = gr.Markdown(label="规则指标与评测结果")
-                        theme_comment_output = gr.Textbox(label="评语 / 状态", lines=3)
+                        theme_comment_output = gr.Textbox(label="评语 / 状态", lines=5)
 
                 bind_task_button(
                     theme_button,
                     run_theme_task,
-                    [model_selector, judge_url, judge_api_key, theme_input, theme_poem_type],
+                    [model_checkbox, model_selector, judge_url, judge_api_key, theme_input, theme_poem_type],
                     [theme_poem_output, theme_metrics_output, theme_comment_output],
                 )
 
@@ -796,14 +985,14 @@ def build_demo() -> gr.Blocks:
                         keyword_poem_type = gr.Dropdown(label="诗体", choices=POEM_TYPES, value="五言绝句")
                         keyword_button = gr.Button("🚀 开始测试", variant="primary")
                     with gr.Column(scale=2):
-                        keyword_poem_output = gr.Textbox(label="待测模型生成结果", lines=4)
+                        keyword_poem_output = gr.Textbox(label="待测模型生成结果", lines=10)
                         keyword_metrics_output = gr.Markdown(label="规则指标与评测结果")
-                        keyword_comment_output = gr.Textbox(label="评语 / 状态", lines=3)
+                        keyword_comment_output = gr.Textbox(label="评语 / 状态", lines=5)
 
                 bind_task_button(
                     keyword_button,
                     run_keyword_task,
-                    [model_selector, judge_url, judge_api_key, keyword_input, keyword_poem_type],
+                    [model_checkbox, model_selector, judge_url, judge_api_key, keyword_input, keyword_poem_type],
                     [keyword_poem_output, keyword_metrics_output, keyword_comment_output],
                 )
 
@@ -812,18 +1001,19 @@ def build_demo() -> gr.Blocks:
                     with gr.Column(scale=1):
                         gr.Markdown(
                             "点击开始测试时，系统会从内置上句-答案样本池中随机抽取一条，"
-                            "无需手动填写上句和参考答案。抽中的样本会显示在右侧指标表中。"
+                            "无需手动填写上句和参考答案；**多模型时对各模型使用同一上句**以便对比。"
+                            "抽中的样本会显示在右侧指标表中。"
                         )
                         prefix_button = gr.Button("🚀 开始测试", variant="primary")
                     with gr.Column(scale=2):
-                        prefix_poem_output = gr.Textbox(label="待测模型生成结果", lines=4)
+                        prefix_poem_output = gr.Textbox(label="待测模型生成结果", lines=10)
                         prefix_metrics_output = gr.Markdown(label="规则指标与评测结果")
-                        prefix_comment_output = gr.Textbox(label="评语 / 状态", lines=3)
+                        prefix_comment_output = gr.Textbox(label="评语 / 状态", lines=5)
 
                 bind_task_button(
                     prefix_button,
                     run_prefix_task,
-                    [model_selector, judge_url, judge_api_key],
+                    [model_checkbox, model_selector, judge_url, judge_api_key],
                     [prefix_poem_output, prefix_metrics_output, prefix_comment_output],
                 )
 
@@ -835,14 +1025,14 @@ def build_demo() -> gr.Blocks:
                         style_poem_type = gr.Dropdown(label="诗体", choices=POEM_TYPES, value="五言绝句")
                         style_button = gr.Button("🚀 开始测试", variant="primary")
                     with gr.Column(scale=2):
-                        style_poem_output = gr.Textbox(label="待测模型生成结果", lines=4)
+                        style_poem_output = gr.Textbox(label="待测模型生成结果", lines=10)
                         style_metrics_output = gr.Markdown(label="规则指标与 LLM-as-a-Judge 百分制评分")
-                        style_comment_output = gr.Textbox(label="裁判模型简短评语", lines=3)
+                        style_comment_output = gr.Textbox(label="裁判模型简短评语", lines=5)
 
                 bind_task_button(
                     style_button,
                     run_style_task,
-                    [model_selector, judge_url, judge_api_key, style_theme_input, style_input, style_poem_type],
+                    [model_checkbox, model_selector, judge_url, judge_api_key, style_theme_input, style_input, style_poem_type],
                     [style_poem_output, style_metrics_output, style_comment_output],
                 )
 

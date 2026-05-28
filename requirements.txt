@@ -7,4 +7,5 @@ requests
 datasets
 transformers
 torch
+peft
 gradio

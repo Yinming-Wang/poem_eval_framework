@@ -2,13 +2,28 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _is_peft_adapter_dir(model_path: Path) -> bool:
+    return (model_path / "adapter_config.json").is_file()
+
+
+def _read_peft_base_model(adapter_dir: Path) -> str:
+    cfg_path = adapter_dir / "adapter_config.json"
+    with cfg_path.open(encoding="utf-8") as handle:
+        data = json.load(handle)
+    base_id = data.get("base_model_name_or_path")
+    if not base_id:
+        raise ValueError("{0} 缺少 base_model_name_or_path。".format(cfg_path))
+    return str(base_id).strip()
 
 
 @dataclass
@@ -64,20 +79,116 @@ def load_model_and_tokenizer(config: dict):
     """
     根据配置加载模型和 tokenizer。
 
-    当前支持 mock 与 Hugging Face 自回归语言模型。
+    当前支持 mock、Hugging Face 自回归语言模型、以及本地字符级 LSTM（models/ 子目录下 vocab.json
+    含 char2idx/idx2char + .pt 权重）。
     """
     model_config = config.get("model", {})
-    model_type = model_config.get("model_type", "mock")
+    model_type = str(model_config.get("model_type", "mock")).strip().lower()
 
     if model_type == "mock":
         return MockPoemModel(), None
+
+    if model_type == "lstm":
+        return _load_lstm_model(model_config)
 
     if model_type == "huggingface":
         return _load_huggingface_model(model_config)
 
     raise ValueError(
-        f"不支持的 model_type: {model_type}。当前支持: mock, huggingface。"
+        f"不支持的 model_type: {model_type}。当前支持: mock, huggingface, lstm。"
     )
+
+
+def _load_glm_peft_model(
+    adapter_dir: Path,
+    tokenizer_path: Path,
+) -> Tuple[Any, Any]:
+    """加载 glm-4-9b-chat 基座 + 本地 LoRA（对齐 hw/poetry/run_eval.py）。"""
+    try:
+        import torch
+        from peft import PeftModel
+        from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+    except ImportError as exc:
+        raise ImportError(
+            "加载 GLM LoRA 需要 transformers、torch 与 peft。请安装：pip install peft"
+        ) from exc
+
+    from inference.glm_compat import (
+        cleanup_generation_config,
+        get_input_device,
+        patch_config_for_legacy_glm4,
+        patch_legacy_glm4_compat,
+        patch_model_tied_weights_keys,
+    )
+
+    base_id = _read_peft_base_model(adapter_dir)
+    tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_path), trust_remote_code=True)
+    if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    patch_legacy_glm4_compat()
+
+    config = AutoConfig.from_pretrained(base_id, trust_remote_code=True)
+    patch_config_for_legacy_glm4(config)
+
+    use_cuda = torch.cuda.is_available()
+    dtype = torch.bfloat16 if use_cuda else torch.float32
+    model = AutoModelForCausalLM.from_pretrained(
+        base_id,
+        config=config,
+        torch_dtype=dtype,
+        trust_remote_code=True,
+        device_map="cuda:0" if use_cuda else None,
+    )
+    if not use_cuda:
+        model.to("cpu")
+
+    patch_model_tied_weights_keys(model)
+    cleanup_generation_config(model, tokenizer)
+
+    model = PeftModel.from_pretrained(model, str(adapter_dir))
+    patch_model_tied_weights_keys(model)
+    cleanup_generation_config(model, tokenizer)
+
+    model.eval()
+    setattr(model, "model_type", "huggingface")
+    setattr(model, "eval_device", get_input_device(model))
+    setattr(model, "_poem_eval_legacy_glm_generate", True)
+    return model, tokenizer
+
+
+def _load_generic_peft_model(
+    adapter_dir: Path,
+    tokenizer_path: Path,
+    requested_device: str,
+) -> Tuple[Any, Any]:
+    """非 GLM 的 LoRA：基座来自 adapter_config.base_model_name_or_path。"""
+    try:
+        import torch
+        from peft import PeftModel
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+    except ImportError as exc:
+        raise ImportError(
+            "检测到 LoRA 目录，需要 peft。请安装：pip install peft"
+        ) from exc
+
+    base_id = _read_peft_base_model(adapter_dir)
+    actual_device = requested_device
+    if actual_device.startswith("cuda") and not torch.cuda.is_available():
+        _print_cuda_fallback_diagnostics(torch)
+        actual_device = "cpu"
+
+    tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_path), trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(base_id, trust_remote_code=True)
+    model.to(actual_device)
+    model = PeftModel.from_pretrained(model, str(adapter_dir))
+    model.to(actual_device)
+    model.eval()
+
+    setattr(model, "model_type", "huggingface")
+    setattr(model, "eval_device", torch.device(actual_device))
+    setattr(model, "_poem_eval_legacy_glm_generate", False)
+    return model, tokenizer
 
 
 def _load_huggingface_model(model_config: dict):
@@ -104,6 +215,20 @@ def _load_huggingface_model(model_config: dict):
             "或将 configs/model_config.yaml 中的 model_type 改为 mock。"
         ) from exc
 
+    if _is_peft_adapter_dir(model_path):
+        base_id_lower = _read_peft_base_model(model_path).lower()
+        is_glm = "glm-4" in base_id_lower or "chatglm" in base_id_lower
+        try:
+            if is_glm:
+                model, tokenizer = _load_glm_peft_model(model_path, tokenizer_path)
+            else:
+                model, tokenizer = _load_generic_peft_model(
+                    model_path, tokenizer_path, requested_device
+                )
+        except Exception as exc:
+            raise RuntimeError(f"LoRA / Hugging Face 模型加载失败: {exc}") from exc
+        return model, tokenizer
+
     device = requested_device
     if requested_device.startswith("cuda") and not torch.cuda.is_available():
         _print_cuda_fallback_diagnostics(torch)
@@ -119,7 +244,24 @@ def _load_huggingface_model(model_config: dict):
 
     setattr(model, "model_type", "huggingface")
     setattr(model, "eval_device", device)
+    setattr(model, "_poem_eval_legacy_glm_generate", False)
     return model, tokenizer
+
+
+def _load_lstm_model(model_config: dict):
+    """加载 poem_eval_framework 约定的 LSTM 目录（char 词表 + checkpoint）。"""
+    from inference.lstm_backend import load_lstm_checkpoint_bundle
+
+    model_path = _resolve_project_path(model_config.get("model_path"))
+    requested_device = str(model_config.get("device", "cpu")).strip().lower()
+
+    if not model_path:
+        raise ValueError("配置错误：model.model_path 不能为空。")
+    if not model_path.exists():
+        raise FileNotFoundError(f"模型路径不存在: {model_path}")
+
+    bundle = load_lstm_checkpoint_bundle(model_path, requested_device)
+    return bundle, None
 
 
 def _resolve_project_path(path_value: Any) -> Optional[Path]:

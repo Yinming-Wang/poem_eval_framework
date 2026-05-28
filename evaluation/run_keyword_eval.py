@@ -17,7 +17,7 @@ import yaml
 from tqdm import tqdm
 
 from evaluation.keyword_coverage import evaluate_keyword_coverage
-from inference.generate import clean_generated_text
+from inference.generate import clean_generated_text, generate_from_chat_messages
 from inference.keyword_prompt import build_keyword_prompt
 from inference.model_loader import load_model_and_tokenizer
 
@@ -201,15 +201,20 @@ def ensure_output_dirs(output_dir: str) -> Tuple[Path, Path]:
 def generate_keyword_poem(model: Any, tokenizer: Any, sample: Dict[str, Any], config: Dict[str, Any]) -> str:
     """根据关键词样本调用 mock 或 Hugging Face 模型生成诗词。"""
     messages = build_keyword_prompt(sample)
+    poem_type = str(sample.get("poem_type") or "五言绝句")
 
     if hasattr(model, "generate_poem"):
         keywords = sample.get("keywords", [])
-        poem_type = str(sample.get("poem_type", "五言绝句"))
-        return clean_generated_text(_mock_keyword_poem(keywords, poem_type))
+        return clean_generated_text(_mock_keyword_poem(keywords, poem_type), poem_type=poem_type)
 
-    prompt = messages_to_prompt(tokenizer, messages)
-    decoded = generate_huggingface_text(model, tokenizer, prompt, config)
-    return clean_generated_text(decoded)
+    return generate_from_chat_messages(
+        model,
+        tokenizer,
+        messages,
+        config,
+        poem_type=poem_type,
+        continuation_prefix="",
+    )
 
 
 def messages_to_prompt(tokenizer: Any, messages: List[Dict[str, str]]) -> str:
@@ -231,42 +236,6 @@ def messages_to_prompt(tokenizer: Any, messages: List[Dict[str, str]]) -> str:
         parts.append("{0}: {1}".format(role, content))
     parts.append("assistant:")
     return "\n".join(parts)
-
-
-def generate_huggingface_text(model: Any, tokenizer: Any, prompt: str, config: Dict[str, Any]) -> str:
-    """使用 Hugging Face generate 接口生成文本，只解码新增 token。"""
-    if tokenizer is None:
-        raise ValueError("Hugging Face 生成需要 tokenizer。")
-
-    import torch
-
-    generation_config = config.get("generation", {})
-    device = getattr(model, "eval_device", None)
-    if device is None:
-        device = next(model.parameters()).device
-
-    inputs = tokenizer(prompt, return_tensors="pt")
-    inputs = {key: value.to(device) for key, value in inputs.items()}
-    input_length = inputs["input_ids"].shape[-1]
-
-    pad_token_id = tokenizer.eos_token_id
-    if pad_token_id is None and tokenizer.pad_token_id is not None:
-        pad_token_id = tokenizer.pad_token_id
-
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=generation_config.get("max_new_tokens", 128),
-            temperature=generation_config.get("temperature", 0.8),
-            top_p=generation_config.get("top_p", 0.95),
-            top_k=generation_config.get("top_k", 50),
-            repetition_penalty=generation_config.get("repetition_penalty", 1.1),
-            do_sample=generation_config.get("do_sample", True),
-            pad_token_id=pad_token_id,
-        )
-
-    generated_ids = outputs[0][input_length:]
-    return tokenizer.decode(generated_ids, skip_special_tokens=True)
 
 
 def _mock_keyword_poem(keywords: List[str], poem_type: str) -> str:

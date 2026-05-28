@@ -1,15 +1,14 @@
 {
   "task_type": "style_control",
-  "total_samples": 10,
-  "average_format_score": 93.0,
-  "average_theme_score": 81.5,
-  "average_fluency_score": 92.0,
-  "average_style_score": 82.0,
-  "average_creativity_score": 69.0,
-  "average_total_score": 85.325,
+  "total_samples": 100,
+  "average_format_score": 100.0,
+  "average_theme_score": 86.3,
+  "average_fluency_score": 96.2,
+  "average_style_score": 86.12,
+  "average_creativity_score": 78.7,
+  "average_total_score": 90.909,
   "failure_type_counts": {
-    "none": 7,
-    "format_error": 1,
-    "topic_drift": 2
+    "none": 92,
+    "topic_drift": 8
   }
 }
